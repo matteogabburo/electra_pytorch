@@ -1,19 +1,7 @@
-import os, sys
-from pathlib import Path
-from functools import partial
-from inspect import isclass
-import random
-import pandas as pd
-import numpy as np
-import torch
-
-import datasets
-
 from argparse import ArgumentParser
 from transformers import AutoTokenizer, AutoConfig
 from _utils.utils import MyConfig
 from _utils.wsc_trick import *  # importing spacy model takes time
-from fastai.text.all import *
 
 import os, sys
 from pathlib import Path
@@ -36,10 +24,12 @@ from hugdatafast import *
 from _utils.utils import *
 from _utils.would_like_to_pr import *
 
+
 def setup_config(args):
 
     c = MyConfig(
         {
+            "output_dir": args.output_dir,
             # enable a single gpu
             "device": "cuda:0",
             # perform a single experiment
@@ -107,7 +97,6 @@ def main(args):
     'double_unordered': True,
     """
 
-
     # %%
     # Check
     if not c.do_finetune:
@@ -150,13 +139,11 @@ def main(args):
     electra_config = ElectraConfig.from_pretrained(f"google/electra-{c.size}-discriminator")
     """
 
-    hf_tokenizer = AutoTokenizer.from_pretrained(
-        c.pretrained_checkpoint
-    )
+    hf_tokenizer = AutoTokenizer.from_pretrained(c.pretrained_checkpoint)
     electra_config = AutoConfig.from_pretrained(c.pretrained_checkpoint)
 
     # wsc
-    #if c.wsc_trick:
+    # if c.wsc_trick:
     #    from _utils.wsc_trick import *  # importing spacy model takes time
 
     # logging
@@ -197,15 +184,6 @@ def main(args):
                 wandb.log({})  # ensure sync of last step
                 self.run.finish()
 
-    # my model
-    #if c.my_model:
-    #sys.path.insert(0, os.path.abspath(".."))
-    #from modeling.model import ModelForDiscriminator
-    #from hyperparameter import electra_hparam_from_hf
-
-    # hparam = electra_hparam_from_hf(electra_config, hf_tokenizer)
-    # hparam.update(hparam_update)
-
     # Path
     Path("./datasets").mkdir(exist_ok=True)
     Path("./checkpoints/glue").mkdir(exist_ok=True, parents=True)
@@ -239,7 +217,9 @@ def main(args):
     }
     TEXT_COLS = {
         **{task: ["question", "sentence"] for task in ["qnli"]},
-        **{task: ["sentence1", "sentence2"] for task in ["mrpc", "stsb", "wnli", "rte"]},
+        **{
+            task: ["sentence1", "sentence2"] for task in ["mrpc", "stsb", "wnli", "rte"]
+        },
         **{task: ["question1", "question2"] for task in ["qqp"]},
         **{task: ["premise", "hypothesis"] for task in ["mnli", "ax"]},
         **{task: ["sentence"] for task in ["cola", "sst2"]},
@@ -247,18 +227,23 @@ def main(args):
     LOSS_FUNC = {
         **{
             task: CrossEntropyLossFlat()
-            for task in ["cola", "sst2", "mrpc", "qqp", "mnli", "qnli", "rte", "wnli", "ax"]
+            for task in [
+                "cola",
+                "sst2",
+                "mrpc",
+                "qqp",
+                "mnli",
+                "qnli",
+                "rte",
+                "wnli",
+                "ax",
+            ]
         },
         **{task: MyMSELossFlat(low=0.0, high=5.0) for task in ["stsb"]},
     }
     if c.wsc_trick:
         LOSS_FUNC["wnli"] = ELECTRAWSCTrickLoss()
         METRICS["wnli"] = [wsc_trick_accuracy]
-
-    # %% [markdown]
-    # # 2. Data
-    # %% [markdown]
-    # ## 2.1 Download and Preprocess
 
     # %%
     def tokenize_sents_max_len(example, cols, max_len, swap=False):
@@ -285,7 +270,6 @@ def main(args):
         example["attn_mask"] = [1] * len(tokens)
         example["token_type_ids"] = token_type
         return example
-
 
     # %%
     glue_dsets = {}
@@ -351,10 +335,12 @@ def main(args):
         )
 
         if c.double_unordered and task in ["mrpc", "stsb"]:
-            dl_kwargs = {"train": {"cache_name": f"double_dl_{c.max_length}_train.json"}}
+            dl_kwargs = {
+                "train": {"cache_name": f"double_dl_{c.max_length}_train.json"}
+            }
         else:
             dl_kwargs = None
-    
+
         print(dl_kwargs)
 
         glue_dls[task] = hf_dsets.dataloaders(
@@ -382,12 +368,6 @@ def main(args):
         glue_dls["wnli"] = HF_Datasets(
             glue_dsets["wnli"], hf_toker=hf_tokenizer, n_inp=4, cols=cols
         ).dataloaders(bs=32, cache_name="dl_tricked_{split}.json")
-
-    # %% [markdown]
-    # ## 1.2 View Data
-    # - View raw data on [nlp-viewer]! (https://huggingface.co/nlp/viewer/)
-    #
-    # - View task description on Tensorflow dataset doc for GLUE (https://www.tensorflow.org/datasets/catalog/glue)
 
     # %%
     if False:
@@ -489,7 +469,9 @@ def main(args):
         )
         glue_dls["wnli"].show_batch(max_n=1)
         print()
-        print("AX (GLUE Diagnostic Dataset) - 0: entailment, 1: neutral, 2: contradiction")
+        print(
+            "AX (GLUE Diagnostic Dataset) - 0: entailment, 1: neutral, 2: contradiction"
+        )
         print(
             (
                 "Dataset size (test): {}".format(
@@ -499,15 +481,6 @@ def main(args):
         )
         glue_dls["ax"].show_batch(max_n=1)
 
-    # %% [markdown]
-    # # 2. Finetuning
-    # %% [markdown]
-    # ## 2.1 Finetuning model
-    # * ELECTRA use CLS encodings as pooled result to predict the sentence. (see [here](https://github.com/google-research/electra/blob/79111328070e491b287c307906701ebc61091eb2/model/modeling.py#L254) of its official repository)
-    #
-    # * Note that we should use different prediction head instance for different tasks.
-
-    # %%
     class SentencePredictor(nn.Module):
         def __init__(self, model, hidden_size, num_class):
             super().__init__()
@@ -537,7 +510,9 @@ def main(args):
         scaler_name = "dimension_scaler" if c.my_model else "embeddings_project"
         layers_name = "layers" if c.my_model else "layer"
         output_name = (
-            "classifier" if not wsc_trick else f"discriminator.discriminator_predictions"
+            "classifier"
+            if not wsc_trick
+            else f"discriminator.discriminator_predictions"
         )
 
         groups = [list_parameters(model, f"{base}.{embed_name}")]
@@ -587,33 +562,25 @@ def main(args):
             print(c.pretrained_checkpoint)
             discriminator = ElectraForPreTraining.from_pretrained(
                 c.pretrained_checkpoint
-                #f"google/electra-{c.size}-discriminator"
             )
-        """
-        else:
-            print(hparam)
-            discriminator = (
-                ModelForDiscriminator(hparam)
-                if c.my_model
-                else ElectraForPreTraining(electra_config)
-            )
-            load_part_model(c.pretrained_ckp_path, discriminator, "discriminator")
-        """
 
         # Seeds & PyTorch benchmark
         torch.backends.cudnn.benchmark = True
         if c.seeds:
-            dls[0].rng = random.Random(c.seeds[i])  # for fastai dataloader
-            random.seed(c.seeds[i])
-            np.random.seed(c.seeds[i])
-            torch.manual_seed(c.seeds[i])
+            print(c.seeds)
+            dls[0].rng = random.Random(c.seeds[0])  # for fastai dataloader
+            random.seed(c.seeds[0])
+            np.random.seed(c.seeds[0])
+            torch.manual_seed(c.seeds[0])
 
         # Create finetuning model
         if is_wsc_trick:
             model = ELECTRAWSCTrickModel(discriminator, hf_tokenizer.pad_token_id)
         else:
             model = SentencePredictor(
-                discriminator.electra, electra_config.hidden_size, num_class=NUM_CLASS[task]
+                discriminator.electra,
+                electra_config.hidden_size,
+                num_class=NUM_CLASS[task],
             )
 
         # Discriminative learning rates
@@ -626,10 +593,16 @@ def main(args):
 
         # Optimizer
         if c.adam_bias_correction:
-            opt_func = partial(Adam, eps=1e-6, mom=0.9, sqr_mom=0.999, wd=c.weight_decay)
+            opt_func = partial(
+                Adam, eps=1e-6, mom=0.9, sqr_mom=0.999, wd=c.weight_decay
+            )
         else:
             opt_func = partial(
-                Adam_no_bias_correction, eps=1e-6, mom=0.9, sqr_mom=0.999, wd=c.weight_decay
+                Adam_no_bias_correction,
+                eps=1e-6,
+                mom=0.9,
+                sqr_mom=0.999,
+                wd=c.weight_decay,
             )
 
         # Learner
@@ -651,7 +624,7 @@ def main(args):
             learn.model = nn.DataParallel(learn.model, device_ids=c.device)
 
         # Mixed precision
-        #learn.to_native_fp16(init_scale=2.0 ** 14)
+        # learn.to_native_fp16(init_scale=2.0 ** 14)
 
         # Gradient clip
         learn.add_cb(GradientClipping(1.0))
@@ -674,7 +647,9 @@ def main(args):
 
         # Learning rate schedule
         if c.schedule == "one_cycle":
-            return learn, partial(learn.fit_one_cycle, n_epoch=num_epochs, lr_max=layer_lrs)
+            return learn, partial(
+                learn.fit_one_cycle, n_epoch=num_epochs, lr_max=layer_lrs
+            )
         elif c.schedule == "adjusted_one_cycle":
             return learn, partial(
                 learn.fit_one_cycle,
@@ -704,11 +679,11 @@ def main(args):
     print(c.do_finetune)
 
     if c.do_finetune:
- 
+
         print("=" * 80)
         print(range(c.start, c.end))
 
-        #for i in range(c.start, c.end):
+        # for i in range(c.start, c.end):
         for i in [0]:
 
             for task in [
@@ -768,8 +743,8 @@ def main(args):
         else:
             return map[task]
 
-    def predict_test(task, checkpoint, dl_idx):
-        output_dir = Path(f"./test_outputs/glue/{c.group_name}")
+    def predict_test(task, checkpoint, dl_idx, output_dir):
+        output_dir = Path("{}/test_outputs/glue/{}".format(output_dir, c.group_name))
         output_dir.mkdir(exist_ok=True)
         device = torch.device(c.device)
 
@@ -780,7 +755,9 @@ def main(args):
         else:
             load_model_(learn, checkpoint)
         results = learn.get_preds(dl=learn.dls[dl_idx], with_decoded=True)
-        preds = results[-1]  # preds -> (predictions logits, targets, decoded prediction)
+        preds = results[
+            -1
+        ]  # preds -> (predictions logits, targets, decoded prediction)
 
         # Decode target class index to its class name
         if task in ["mnli", "ax"]:
@@ -816,7 +793,7 @@ def main(args):
             # run test for all testset in this task
             dl_idxs = [-1, -2] if task == "mnli" else [-1]
             for dl_idx in dl_idxs:
-                df = predict_test(task, ckp, dl_idx)
+                df = predict_test(task, ckp, dl_idx, c.output_dir)
 
 
 if __name__ == "__main__":
@@ -834,8 +811,8 @@ if __name__ == "__main__":
     parser.add_argument("--layer_lr_decay", type=float, default=0.8)
     parser.add_argument("--fp16", action="store_true")
 
-    #parser.add_argument("--num_train_epochs", type=int, default=3)
-    #parser.add_argument("--output_dir", type=str, required=True)
+    # parser.add_argument("--num_train_epochs", type=int, default=3)
+    parser.add_argument("--output_dir", type=str, required=True)
     parser.add_argument("--seed", type=int, default=123)
 
     parser.add_argument("--wsc_trick", type=bool, default=False)

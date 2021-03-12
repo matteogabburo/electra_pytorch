@@ -185,10 +185,20 @@ def main(args):
                 self.run.finish()
 
     # Path
-    Path("./datasets").mkdir(exist_ok=True)
-    Path("./checkpoints/glue").mkdir(exist_ok=True, parents=True)
-    Path("./test_outputs/glue").mkdir(exist_ok=True, parents=True)
-    c.pretrained_ckp_path = Path(f"./checkpoints/pretrain/{c.pretrained_checkpoint}")
+    if not os.path.exists(c.output_dir):
+        os.makedirs(c.output_dir)
+    Path("{}/datasets".format(c.output_dir)).mkdir(exist_ok=True)
+    Path("{}/checkpoints/glue".format(c.output_dir)).mkdir(exist_ok=True, parents=True)
+    Path("{}/test_outputs/glue".format(c.output_dir)).mkdir(exist_ok=True, parents=True)
+    c.pretrained_ckp_path = Path(
+        "{}/checkpoints/pretrain/{}".format(c.output_dir, c.pretrained_checkpoint)
+    )
+
+    print("prepare out paths:")
+    print(Path("{}/datasets".format(c.output_dir)))
+    print(Path("{}/checkpoints/glue".format(c.output_dir)))
+    print(Path("{}/test_outputs/glue".format(c.output_dir)))
+
     if c.group_name is None:
         if c.pretrained_checkpoint:
             print(c.pretrained_checkpoint)

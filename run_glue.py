@@ -147,6 +147,7 @@ def store_datasets(
     if double_unordered and task in ["mrpc", "stsb"]:
         swap_tok_func = partial(
             tokenize_sents_max_len,
+            hf_tokenizer=hf_tokenizer,
             cols=tasks_param["text_cols"][task],
             max_len=max_length,
             swap=True,

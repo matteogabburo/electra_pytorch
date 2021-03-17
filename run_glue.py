@@ -42,7 +42,7 @@ from _utils.utils import (
 from _utils.would_like_to_pr import GradientClipping
 
 GLUE_TASKS = {
-    "MRPC": "mprc",
+    "MRPC": "mrpc",
     "CoLA": "cola",
     "SST2": "sst2",
     "STSB": "stsb",

@@ -436,7 +436,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--double_unordered", type=bool, default=True)
     parser.add_argument("--wsc_trick", type=bool, default=False)
-    parser.add_argument("--adam_bias_correction", type=bool, default=True)
+    parser.add_argument("--adam_bias_correction", type=bool, default=False)
 
     parser.add_argument("--schedule", type=str, default="original_linear")
 

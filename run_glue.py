@@ -344,6 +344,7 @@ def main(args):
 
     # prepare output dirs
     if not os.path.exists(args.output_dir):
+        print('Prepare output dir "{}"'.format(args.output_dir))
         os.makedirs(args.output_dir)
 
     # the datasets will be stored in <args_output_dir>/datasets/
@@ -359,7 +360,8 @@ def main(args):
     # task params
     tasks_param = setup_tasks(args.wsc_trick)
 
-    # tokenizer
+    # tokenizer & model
+    print('Loading weights and tokenizer from "{}"'.format(args.model_name_or_path))
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     model = AutoModel.from_pretrained(args.model_name_or_path)
 
@@ -402,6 +404,7 @@ def main(args):
             (measure, str(learn.recorder.log[i]))
             for i, measure in enumerate(learn.recorder.metric_names)
         ]
+        print('Saving in "{}"'.format(args.output_dir))
         with open(
             os.path.join(args.output_dir, "eval_results_{}.txt".format(task)), "w"
         ) as f:

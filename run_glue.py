@@ -33,7 +33,7 @@ from finetune_utils import (
     get_layer_lrs,
 )
 from hugdatafast.fastai import HF_Datasets
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from _utils.utils import (
     Adam_no_bias_correction,
     linear_warmup_and_then_decay,
@@ -186,14 +186,43 @@ def store_datasets(
     return glue_dls
 
 
+def hf_roberta_param_splitter(model, wsc_trick=False):
+
+    base = "base_model" if not wsc_trick else f"base_model.electra"
+    embed_name = "embeddings" # if not wsc_trick else f"embeddings"
+    #scaler_name = "embeddings_project"
+    layers_name = "layer"
+    output_name = (
+        "classifier" if not wsc_trick else f"base_model.classifier"
+    )
+
+    groups = [list_parameters(model, f"{base}.{embed_name}")]
+    for i in range(model.base_model.config.num_hidden_layers):
+        groups.append(list_parameters(model, f"{base}.encoder.{layers_name}[{i}]"))
+    groups.append(list_parameters(model, output_name))
+    #if model.base_model.config.hidden_size != model.base_model.config.embedding_size:
+    #    groups[0] += list_parameters(model, f"{base}.{scaler_name}")
+    # if c.my_model and hparam["pre_norm"]:
+    #    groups[-2] += list_parameters(model, f"{base}.encoder.norm")
+
+    assert len(list(model.parameters())) == sum([len(g) for g in groups])
+    for i, (p1, p2) in enumerate(
+        zip(model.parameters(), [p for g in groups for p in g])
+    ):
+        assert torch.equal(p1, p2), f"The {i} th tensor"
+    
+    #print(groups)
+    return groups
+
+
 def hf_electra_param_splitter(model, wsc_trick=False):
 
-    base = "discriminator.electra" if wsc_trick else "base_model"
-    embed_name = "embeddings"
+    base = "base_model" if not wsc_trick else f"base_model.electra"
+    embed_name = "embeddings" # if not wsc_trick else f"embeddings"
     scaler_name = "embeddings_project"
     layers_name = "layer"
     output_name = (
-        "classifier" if not wsc_trick else f"discriminator.discriminator_predictions"
+        "classifier" if not wsc_trick else f"base_model.classifier"
     )
 
     groups = [list_parameters(model, f"{base}.{embed_name}")]
@@ -210,7 +239,10 @@ def hf_electra_param_splitter(model, wsc_trick=False):
         zip(model.parameters(), [p for g in groups for p in g])
     ):
         assert torch.equal(p1, p2), f"The {i} th tensor"
+
+    #print(groups)
     return groups
+
 
 
 def get_glue_learner(
@@ -240,13 +272,14 @@ def get_glue_learner(
 
     # Dataloaders
     dls = dataloaders[task]
+    """
     if isinstance(device, str):
         dls.to(torch.device(device))
     elif isinstance(device, list):
         dls.to(torch.device("cuda", device[0]))
     else:
         dls.to(torch.device("cuda:0"))
-
+    """
     # Seeds & PyTorch benchmark
     torch.backends.cudnn.benchmark = True
     if seed:
@@ -363,7 +396,7 @@ def main(args):
     # tokenizer & model
     print('Loading weights and tokenizer from "{}"'.format(args.model_name_or_path))
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
-    model = AutoModel.from_pretrained(args.model_name_or_path)
+    model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path)
 
     # datasets setup
     dataloaders = store_datasets(

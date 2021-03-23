@@ -698,7 +698,6 @@ if c.do_finetune:
                 run_name = f"{c.group_name}_{task}_{i}"
             else:
                 run_name = None
-                print(task)
             learn, fit_fc = get_glue_learner(task, run_name)
             fit_fc()
             if run_name:

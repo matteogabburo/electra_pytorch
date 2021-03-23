@@ -104,7 +104,7 @@ def wsc_trick_process(sample, hf_toker):
 class ELECTRAWSCTrickModel(nn.Module):
     def __init__(self, discriminator, pad_idx):
         super().__init__()
-        self.discriminator = discriminator
+        self.base_model = discriminator
         self.pad_idx = pad_idx
 
     def forward(self, *xb):
@@ -151,7 +151,7 @@ class ELECTRAWSCTrickModel(nn.Module):
             sents = torch.stack(sents)  # (#candidate, max_len)
             masks = torch.stack(masks)  # (#candidate, max_len)
             # get discrimiator scores for each candidate
-            logits = self.discriminator(sents)[0]  # (#candidate, max_len)
+            logits = self.base_model(sents)[0]  # (#candidate, max_len)
             scores = (logits * masks).sum(dim=-1)  # (#candidate,)
             scores = scores / masks.sum(dim=-1)
             # save

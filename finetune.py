@@ -517,6 +517,7 @@ def hf_electra_param_splitter(model, wsc_trick=False):
     groups = [list_parameters(model, f"{base}.{embed_name}")]
     for i in range(electra_config.num_hidden_layers):
         groups.append(list_parameters(model, f"{base}.encoder.{layers_name}[{i}]"))
+
     groups.append(list_parameters(model, output_name))
     if electra_config.hidden_size != electra_config.embedding_size:
         groups[0] += list_parameters(model, f"{base}.{scaler_name}")

@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 
 
@@ -37,7 +38,7 @@ class SentencePredictor(nn.Module):
         )  # if regression task, squeeze to (B), else (B,#class)
 
 
-def tokenize_sents_max_len(example, hf_tokenizer, cols, max_len, swap=False):
+def tokenize_sents_max_len(example, hf_tokenizer, cols, max_len, swap=False, use_token_type_ids=True):
     # Follow BERT and ELECTRA, truncate the examples longer than max length
     tokens_a = hf_tokenizer.tokenize(example[cols[0]])
     tokens_b = hf_tokenizer.tokenize(example[cols[1]]) if len(cols) == 2 else []
@@ -59,6 +60,29 @@ def tokenize_sents_max_len(example, hf_tokenizer, cols, max_len, swap=False):
         token_type += [1] * (len(tokens_b) + 1)
     example["inp_ids"] = hf_tokenizer.convert_tokens_to_ids(tokens)
     example["attn_mask"] = [1] * len(tokens)
-    example["token_type_ids"] = token_type
+    example["token_type_ids"] = [0] * len(tokens)
 
     return example
+
+
+def pad_tensors_roberta(tensors, max_length=None, pad_token=None):
+    if max_length is None:
+        max_length = max(len(x) for x in tensors)
+    tensors = [
+        torch.cat([
+            x,
+            torch.tensor([pad_token if pad_token is not None else x[-1]] * (max_length - len(x)), dtype=torch.long)
+        ], axis=0)
+        for x in tensors
+    ]
+    return tensors
+
+
+def collate_roberta_fn(batch, pad_token=None):
+    r""" Collate paying attention to token type ids (roberta does not use them -> should all be 0). """
+    ids, attention_mask, token_type_ids, *other = zip(*batch)
+    ids = torch.stack(pad_tensors_roberta(ids, pad_token=pad_token), axis=0)
+    attention_mask = torch.stack(pad_tensors_roberta(attention_mask), axis=0)
+    token_type_ids = torch.stack(pad_tensors_roberta(token_type_ids), axis=0)
+    other = tuple(torch.stack(x, axis=0) for x in other)
+    return (ids, attention_mask, token_type_ids) + other

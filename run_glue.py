@@ -1,4 +1,4 @@
-import os, sys
+import os
 import random
 import torch
 import datasets
@@ -6,6 +6,8 @@ import numpy as np
 from torch import nn
 from argparse import ArgumentParser
 from functools import partial
+
+from transformers.models.auto.configuration_auto import AutoConfig
 from fastai.text.all import (
     ParamScheduler,
     Learner,
@@ -29,9 +31,10 @@ from _utils.wsc_trick import (
 from finetune_utils import (
     tokenize_sents_max_len,
     SentencePredictor,
-    list_parameters,
     get_layer_lrs,
+    collate_roberta_fn
 )
+from params_splitters import hf_roberta_param_splitter, hf_electra_param_splitter
 from hugdatafast.fastai import HF_Datasets
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from _utils.utils import (
@@ -113,6 +116,7 @@ def store_datasets(
     task,
     tasks_param,
     hf_tokenizer,
+    config,
     cache_dir,
     max_length,
     double_unordered,
@@ -120,6 +124,10 @@ def store_datasets(
 ):
     glue_dsets = {}
     glue_dls = {}
+
+    use_token_typen_ids = (config.model_type != "roberta")
+    if not use_token_typen_ids:
+        print("Warning: not using token_typen_ids")
 
     # Load / download datasets.
     dsets = datasets.load_dataset("glue", task, cache_dir=cache_dir)
@@ -139,6 +147,7 @@ def store_datasets(
         hf_tokenizer=hf_tokenizer,
         cols=tasks_param["text_cols"][task],
         max_len=max_length,
+        use_token_type_ids=use_token_typen_ids
     )
     glue_dsets[task] = dsets.my_map(
         tok_func, cache_file_names=f"tokenized_{max_length}_{{split}}"
@@ -151,6 +160,7 @@ def store_datasets(
             cols=tasks_param["text_cols"][task],
             max_len=max_length,
             swap=True,
+            use_token_type_ids=use_token_typen_ids
         )
         swapped_train = dsets["train"].my_map(
             swap_tok_func, cache_file_name=f"swapped_tokenized_{max_length}_train"
@@ -181,74 +191,16 @@ def store_datasets(
         num_workers=num_workers,
         cache_name=f"dl_{max_length}_{{split}}.json",
         dl_kwargs=dl_kwargs,
+        create_batch=partial(collate_roberta_fn, pad_token=hf_tokenizer.pad_token_id) if not use_token_typen_ids else None
     )
-
     return glue_dls
-
-
-def hf_roberta_param_splitter(model, wsc_trick=False):
-
-    base = "base_model" if not wsc_trick else f"base_model.electra"
-    embed_name = "embeddings" # if not wsc_trick else f"embeddings"
-    #scaler_name = "embeddings_project"
-    layers_name = "layer"
-    output_name = (
-        "classifier" if not wsc_trick else f"base_model.classifier"
-    )
-
-    groups = [list_parameters(model, f"{base}.{embed_name}")]
-    for i in range(model.base_model.config.num_hidden_layers):
-        groups.append(list_parameters(model, f"{base}.encoder.{layers_name}[{i}]"))
-    groups.append(list_parameters(model, output_name))
-    #if model.base_model.config.hidden_size != model.base_model.config.embedding_size:
-    #    groups[0] += list_parameters(model, f"{base}.{scaler_name}")
-    # if c.my_model and hparam["pre_norm"]:
-    #    groups[-2] += list_parameters(model, f"{base}.encoder.norm")
-
-    assert len(list(model.parameters())) == sum([len(g) for g in groups])
-    for i, (p1, p2) in enumerate(
-        zip(model.parameters(), [p for g in groups for p in g])
-    ):
-        assert torch.equal(p1, p2), f"The {i} th tensor"
-    
-    #print(groups)
-    return groups
-
-
-def hf_electra_param_splitter(model, wsc_trick=False):
-
-    base = "base_model" if not wsc_trick else f"base_model.electra"
-    embed_name = "embeddings" # if not wsc_trick else f"embeddings"
-    scaler_name = "embeddings_project"
-    layers_name = "layer"
-    output_name = (
-        "classifier" if not wsc_trick else f"base_model.classifier"
-    )
-
-    groups = [list_parameters(model, f"{base}.{embed_name}")]
-    for i in range(model.base_model.config.num_hidden_layers):
-        groups.append(list_parameters(model, f"{base}.encoder.{layers_name}[{i}]"))
-    groups.append(list_parameters(model, output_name))
-    if model.base_model.config.hidden_size != model.base_model.config.embedding_size:
-        groups[0] += list_parameters(model, f"{base}.{scaler_name}")
-    # if c.my_model and hparam["pre_norm"]:
-    #    groups[-2] += list_parameters(model, f"{base}.encoder.norm")
-
-    assert len(list(model.parameters())) == sum([len(g) for g in groups])
-    for i, (p1, p2) in enumerate(
-        zip(model.parameters(), [p for g in groups for p in g])
-    ):
-        assert torch.equal(p1, p2), f"The {i} th tensor"
-
-    #print(groups)
-    return groups
-
 
 
 def get_glue_learner(
     task,
     tasks_param,
-    discriminator,
+    config,
+    model,
     dataloaders,
     weight_decay,
     hf_tokenizer,
@@ -272,14 +224,13 @@ def get_glue_learner(
 
     # Dataloaders
     dls = dataloaders[task]
-    """
     if isinstance(device, str):
         dls.to(torch.device(device))
     elif isinstance(device, list):
         dls.to(torch.device("cuda", device[0]))
     else:
         dls.to(torch.device("cuda:0"))
-    """
+
     # Seeds & PyTorch benchmark
     torch.backends.cudnn.benchmark = True
     if seed:
@@ -290,17 +241,22 @@ def get_glue_learner(
 
     # Create finetuning model
     if is_wsc_trick:
-        model = ELECTRAWSCTrickModel(discriminator, hf_tokenizer.pad_token_id)
+        model = ELECTRAWSCTrickModel(model, hf_tokenizer.pad_token_id)
     else:
         model = SentencePredictor(
-            discriminator.base_model,
-            discriminator.base_model.config.hidden_size,
+            model.base_model,
+            model.base_model.config.hidden_size,
             num_class=tasks_param["num_class"][task],
             xavier_reinited_outlayer=True,
         )
 
     # Discriminative learning rates
-    splitter = partial(hf_electra_param_splitter, wsc_trick=is_wsc_trick)
+    if config.model_type == "electra":
+        splitter = partial(hf_electra_param_splitter, wsc_trick=is_wsc_trick)
+    elif config.model_type == "roberta":
+        splitter = partial(hf_roberta_param_splitter, wsc_trick=is_wsc_trick)
+    else:
+        raise ValueError(f"Not supported model type {config.model_type}")
     layer_lrs = get_layer_lrs(
         lr=lr,
         original_lr_layer_decays=True,
@@ -372,22 +328,21 @@ def get_glue_learner(
 
 def main(args):
 
-    assert args.task_name in GLUE_TASKS
     task = GLUE_TASKS[args.task_name]
 
     # prepare output dirs
-    if not os.path.exists(args.output_dir):
+    if not os.path.isdir(args.output_dir):
         print('Prepare output dir "{}"'.format(args.output_dir))
         os.makedirs(args.output_dir)
 
     # the datasets will be stored in <args_output_dir>/datasets/
     datasets_cache_dir = os.path.join(args.output_dir, "datasets")
-    if not os.path.exists(datasets_cache_dir):
+    if not os.path.isdir(datasets_cache_dir):
         os.makedirs(datasets_cache_dir)
 
     # the checkpoints will be stored in <args_output_dir>/checkpoints/
     checkpoints_dir = os.path.join(args.output_dir, "checkpoints")
-    if not os.path.exists(checkpoints_dir):
+    if not os.path.isdir(checkpoints_dir):
         os.makedirs(checkpoints_dir)
 
     # task params
@@ -395,14 +350,17 @@ def main(args):
 
     # tokenizer & model
     print('Loading weights and tokenizer from "{}"'.format(args.model_name_or_path))
+    config = AutoConfig.from_pretrained(args.model_name_or_path)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path)
+    print("Model config: ", config)
 
     # datasets setup
     dataloaders = store_datasets(
         task,
         tasks_param,
         hf_tokenizer=tokenizer,
+        config=config,
         cache_dir=datasets_cache_dir,
         max_length=args.max_seq_length,
         double_unordered=args.double_unordered,
@@ -415,6 +373,7 @@ def main(args):
         learn, fit_fc = get_glue_learner(
             task,
             tasks_param,
+            config,
             model,
             dataloaders,
             args.weight_decay,
@@ -449,7 +408,7 @@ if __name__ == "__main__":
     parser = ArgumentParser()
 
     parser.add_argument("--model_name_or_path", type=str, required=True)
-    parser.add_argument("--task_name", type=str, required=True)
+    parser.add_argument("--task_name", type=str, required=True, choices=GLUE_TASKS.keys())
     parser.add_argument("--do_train", action="store_true")
     parser.add_argument("--do_eval", action="store_true")
     parser.add_argument("--max_seq_length", type=int, default=128)

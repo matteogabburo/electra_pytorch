@@ -224,14 +224,13 @@ def get_glue_learner(
 
     # Dataloaders
     dls = dataloaders[task]
-    """
     if isinstance(device, str):
         dls.to(torch.device(device))
     elif isinstance(device, list):
         dls.to(torch.device("cuda", device[0]))
     else:
         dls.to(torch.device("cuda:0"))
-    """
+
     # Seeds & PyTorch benchmark
     torch.backends.cudnn.benchmark = True
     if seed:

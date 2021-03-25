@@ -26,8 +26,6 @@ class SentencePredictor(nn.Module):
 
     def forward(self, input_ids, attention_mask, token_type_ids):
 
-        print(input_ids.shape, attention_mask.shape, attention_mask.shape, token_type_ids.shape )
-
         x = self.base_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
